@@ -17,6 +17,11 @@ services:
       #initialize db with sql file (create table)
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
 
+  redis-cache:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
   #define app service
   app:
     build: . #build image from dockerfile in curr direct. 
@@ -24,8 +29,10 @@ services:
       - "8080:8080"
     environment:
       DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
     depends_on:
       - db #start db service before app service
+      - redis-cache #start redis-cache service before app service
 
 
 #add volume in hard disk of host machine (where data stored in windows)

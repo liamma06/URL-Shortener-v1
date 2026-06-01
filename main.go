@@ -1,15 +1,21 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // Import the pgx driver for PostgreSQL
+	"github.com/redis/go-redis/v9"
 )
+
+var ctx = context.Background() // Context for Redis operations
+//context is used to manage timeouts and cancellation of operations, especially for network calls like Redis. It allows us to set deadlines or cancel operations if they take too long, preventing resource leaks and improving the responsiveness of our application.
 
 func main() {
 
@@ -27,9 +33,20 @@ func main() {
 		log.Fatalf("Cannot connect to the database server: %v", err)
 	}
 
+	// Redis connection setup
+	redisUrl := os.Getenv("REDIS_URL")
+	rdb := redis.NewClient(&redis.Options{
+		Addr: redisUrl,
+	})
+	_, err = rdb.Ping(ctx).Result() // Check if Redis is reachable
+	if err != nil {
+		log.Fatalf("Cannot connect to Redis: %v", err)
+		return
+	}
+
 	// Set up HTTP handlers
 	http.HandleFunc("/shorten", shortenHandler(db))
-	http.HandleFunc("/{code}", getCodeHandler(db))
+	http.HandleFunc("/{code}", getCodeHandler(db, rdb))
 
 	err = http.ListenAndServe(":8080", nil)
 	if err != nil {
@@ -78,14 +95,21 @@ func shortenHandler(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-func getCodeHandler(db *sql.DB) http.HandlerFunc {
+func getCodeHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		code := r.PathValue("code")
+
+		//check Redis cache first
+		cachedURL, err := rdb.Get(ctx, code).Result()
+		if err == nil {
+			http.Redirect(w, r, cachedURL, http.StatusFound)
+			return
+		}
 
 		var originalURL string
 
 		//query db for original URL and handle errors and write to originalURL variable
-		err := db.QueryRow("SELECT original_url FROM urls WHERE short_code = $1", code).Scan(&originalURL)
+		err = db.QueryRow("SELECT original_url FROM urls WHERE short_code = $1", code).Scan(&originalURL)
 		if err != nil {
 			if err == sql.ErrNoRows {
 				http.Error(w, "URL not found", http.StatusNotFound)
@@ -94,6 +118,14 @@ func getCodeHandler(db *sql.DB) http.HandlerFunc {
 			}
 			return
 		}
+
+		//store in Redis cache for future requests
+		err = rdb.Set(ctx, code, originalURL, 24*time.Hour).Err()
+		if err != nil {
+			log.Printf("Failed to cache URL in Redis: %v", err)
+		}
+
 		http.Redirect(w, r, originalURL, http.StatusFound) //redirect
+
 	}
 }
