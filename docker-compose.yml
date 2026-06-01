@@ -1,0 +1,33 @@
+services: 
+
+  #define db service 
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5432:5432"
+    
+    #persist data of postgres (where data stored in linux container)
+    volumes:
+      - db_data:/var/lib/postgresql/data 
+
+      #initialize db with sql file (create table)
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+
+  #define app service
+  app:
+    build: . #build image from dockerfile in curr direct. 
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    depends_on:
+      - db #start db service before app service
+
+
+#add volume in hard disk of host machine (where data stored in windows)
+volumes:
+  db_data:
